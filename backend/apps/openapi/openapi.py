@@ -138,7 +138,8 @@ async def get_data_source_by_id_or_name(
 async def getChat(
         current_user: CurrentUser,
         chat_question: OpenChatQuestion,
-        current_assistant: CurrentAssistant
+        current_assistant: CurrentAssistant,
+        task_type: str = "chat"
 ):
     """
     创建聊天完成（Create Chat Completion）
@@ -158,73 +159,27 @@ async def getChat(
         HTTPException: 当处理过程中出现异常时抛出500错误
     """
     try:
-        # 获取数据源信息
-        for session in get_session():
-            datasource = get_datasource_by_name_or_id(
-                session=session,
-                user=current_user,
-                query=DataSourceRequest(id=chat_question.db_id)
+        agent = ChatAgent(current_user=current_user,
+                          chat_question=chat_question,
+                          current_assistant=current_assistant,
+                          task_type=task_type)
+
+        # predict or analysis
+        if task_type != "chat":
+            agent.run_analysis_or_predict()
+            return StreamingResponse(agent.llm_service.await_result(), media_type="text/event-stream")
+        # chat
+        else:
+            stream = agent.run_chat()
+
+            # 返回经过合并处理的流式响应
+            return StreamingResponse(
+                merge_streaming_chunks(stream=stream,
+                                       llm_service=agent.llm_service,
+                                       payload=agent.payload,
+                                       chat_question=agent.chat_question),
+                media_type="text/event-stream"
             )
-            if datasource:
-                # 绑定数据源到聊天会话
-                await bind_datasource(datasource, chat_question.chat_id, session, current_user)
-                break
-            else:
-                raise HTTPException(
-                    status_code=500,
-                    detail="数据源未找到"
-                )
-
-        # 创建LLM服务实例
-        llm_service = await LLMService.create(
-            current_user,
-            chat_question,
-            current_assistant,
-            no_reasoning=chat_question.no_reasoning,
-            embedding=True
-        )
-        # 如果存在意图检测，则进行意图识别
-        payload: Optional[IntentPayload] = (
-            chat_identify_intent(llm_service.llm, chat_question.question)
-            if chat_question.intent is True else None
-        )
-
-        # 记录意图识别结果
-        if payload:
-            SQLBotLogUtil.info(f"意图识别详情 - 原始输入: '{chat_question.question}', "
-                               f"搜索意图: '{payload.search}', "
-                               f"分析意图: '{payload.analysis}', "
-                               f"预测意图: '{payload.predict}'")
-        else:
-            SQLBotLogUtil.info(
-                f"未识别到意图 - 输入: '{chat_question.question}', 未识别到有效意图")
-            if chat_question.analysis or chat_question.predict:
-                payload = IntentPayload(
-                    search=chat_question.question,
-                    analysis=chat_question.question if chat_question.analysis else "",
-                    predict=chat_question.question if chat_question.predict else ""
-                )
-
-        # 如果存在意图，则使用意图作为问题
-        if payload is not None and payload.search != "":
-            llm_service.chat_question.question = payload.search
-        else:
-            payload = None
-
-        # 初始化聊天记录
-        llm_service.init_record()
-
-        # 异步运行任务
-        llm_service.run_task_async()
-        stream = llm_service.await_result()
-        # 返回经过合并处理的流式响应
-        return StreamingResponse(
-            merge_streaming_chunks(stream=stream,
-                                   llm_service=llm_service,
-                                   payload=payload,
-                                   chat_question=chat_question),
-            media_type="text/event-stream"
-        )
     except Exception as e:
         # 记录异常信息用于调试
         SQLBotLogUtil.error(f"聊天接口异常: {str(e)}")

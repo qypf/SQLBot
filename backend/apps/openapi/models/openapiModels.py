@@ -94,6 +94,8 @@ class OpenChatQuestion(AiModelQuestion):
     every: Optional[bool] = Body(default=False, description='逐条分析,分析')
     no_reasoning: Optional[bool] = Body(default=True, description='不思考')
     history_open: Optional[bool] = Body(default=True, description='历史信息打开')
+    chat_record_id: int = Body(None, description='会话聊天消息标识')
+    chat_data_object: Any = Body(None, description='分析问题')
 
     @field_validator('my_promote', 'my_schema', 'my_sql', mode='before')
     @classmethod
